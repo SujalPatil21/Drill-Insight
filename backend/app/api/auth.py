@@ -20,18 +20,11 @@ from app.db.database import get_db
 from app.models.models import Engineer
 
 try:
-    from passlib.context import CryptContext
     from jose import JWTError, jwt
-    PASSLIB_AVAILABLE = True
 except ImportError:
-    PASSLIB_AVAILABLE = False
+    pass
 
-# Try direct bcrypt as fallback for passlib compat issues
-try:
-    import bcrypt as _bcrypt_lib
-    BCRYPT_DIRECT = True
-except ImportError:
-    BCRYPT_DIRECT = False
+import bcrypt as _bcrypt_lib
 
 logger = logging.getLogger(__name__)
 
@@ -42,49 +35,23 @@ SECRET_KEY = "nwis-dev-secret-key-change-in-production-2026"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
 
-if PASSLIB_AVAILABLE:
-    try:
-        pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-        # Test it works
-        _test = pwd_context.hash("test")
-        PASSLIB_OK = True
-    except Exception:
-        PASSLIB_OK = False
-else:
-    PASSLIB_OK = False
-
-
 def verify_password(plain: str, hashed: str) -> bool:
-    if PASSLIB_OK:
-        return pwd_context.verify(plain, hashed)
-    if BCRYPT_DIRECT:
-        return _bcrypt_lib.checkpw(plain.encode(), hashed.encode())
-    return plain == hashed  # dev-only fallback
-
+    try:
+        return _bcrypt_lib.checkpw(plain.encode('utf-8'), hashed.encode('utf-8'))
+    except Exception:
+        return False
 
 def hash_password(plain: str) -> str:
-    if PASSLIB_OK:
-        return pwd_context.hash(plain)
-    if BCRYPT_DIRECT:
-        salt = _bcrypt_lib.gensalt()
-        return _bcrypt_lib.hashpw(plain.encode(), salt).decode()
-    return plain  # dev-only fallback
-
+    salt = _bcrypt_lib.gensalt()
+    return _bcrypt_lib.hashpw(plain.encode('utf-8'), salt).decode('utf-8')
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire})
-    if not PASSLIB_AVAILABLE:
-        # crude fallback — not for production
-        return f"dev-token:{data.get('sub','')}"
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-
 def decode_access_token(token: str) -> Optional[dict]:
-    if not PASSLIB_AVAILABLE or token.startswith("dev-token:"):
-        sub = token.replace("dev-token:", "")
-        return {"sub": sub} if sub else None
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         return payload

@@ -81,22 +81,25 @@ function injectMapCSS() {
 }
 
 // ── Icon factories ────────────────────────────────────────────────────────────
-function makeWellIcon(status: string, risk: string, selected: boolean, isInfluencing: boolean, isPrimaryInfluencing: boolean, hasCandidateSelected: boolean): L.DivIcon {
+function makeWellIcon(status: string, risk: string, selected: boolean, isInfluencing: boolean, influencingRank: number | null, hasCandidateSelected: boolean): L.DivIcon {
   injectMapCSS();
   const isActive = status === 'ACTIVE';
   let ringColor = '#13A89E';
   if (risk === 'HIGH' || risk === 'CRITICAL') ringColor = '#D94A4A';
   else if (risk === 'MEDIUM') ringColor = '#C78A2C';
   
+  const isTop3 = influencingRank !== null && influencingRank < 3;
+  const isPrimary = influencingRank === 0;
+  
   const glowFilter = selected ? 'filter:drop-shadow(0 0 5px #13A89E);' : '';
-  const scaleStyle = selected ? 'transform:scale(1.25);' : (isPrimaryInfluencing ? 'transform:scale(1.15);' : '');
+  const scaleStyle = selected ? 'transform:scale(1.25);' : (isTop3 ? 'transform:scale(1.15);' : '');
   
   // Dim non-supporting wells when a candidate is selected
   const opacityStyle = hasCandidateSelected && !isInfluencing ? 'opacity:0.6;' : 'opacity:1;';
 
   const evidenceRingHtml = isInfluencing
-    ? `<svg class="${isPrimaryInfluencing ? 'nwis-evidence-ring' : ''}" style="position:absolute;top:-6px;left:-6px;width:40px;height:40px;" viewBox="0 0 40 40">
-         <circle cx="20" cy="20" r="17" fill="none" stroke="${ringColor}" stroke-width="${isPrimaryInfluencing ? '2.5' : '1.5'}" opacity="${isPrimaryInfluencing ? '0.9' : '0.8'}"/>
+    ? `<svg class="${isTop3 ? 'nwis-evidence-ring' : ''}" style="position:absolute;top:-6px;left:-6px;width:40px;height:40px;" viewBox="0 0 40 40">
+         <circle cx="20" cy="20" r="17" fill="none" stroke="${ringColor}" stroke-width="${isPrimary ? '2.5' : '1.5'}" opacity="${isPrimary ? '0.9' : '0.8'}"/>
        </svg>`
     : '';
 
@@ -115,8 +118,8 @@ function makeWellIcon(status: string, risk: string, selected: boolean, isInfluen
   }
 
   const inactiveEvidenceRingHtml = isInfluencing 
-    ? `<svg class="${isPrimaryInfluencing ? 'nwis-evidence-ring' : ''}" style="position:absolute;top:-12px;left:-12px;width:40px;height:40px;" viewBox="0 0 40 40">
-         <circle cx="20" cy="20" r="17" fill="none" stroke="${ringColor}" stroke-width="${isPrimaryInfluencing ? '2.5' : '1.5'}" opacity="${isPrimaryInfluencing ? '0.9' : '0.8'}"/>
+    ? `<svg class="${isTop3 ? 'nwis-evidence-ring' : ''}" style="position:absolute;top:-12px;left:-12px;width:40px;height:40px;" viewBox="0 0 40 40">
+         <circle cx="20" cy="20" r="17" fill="none" stroke="${ringColor}" stroke-width="${isPrimary ? '2.5' : '1.5'}" opacity="${isPrimary ? '0.9' : '0.8'}"/>
        </svg>`
     : '';
 
@@ -168,20 +171,29 @@ function fieldColor(name: string) {
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
-const MapFitter: React.FC<{wells: WellPoint[]; cands?: CandidatePoint[]; candidateLocation?: {lat:number;lng:number}|null}> = ({wells,cands,candidateLocation}) => {
+const MapFitter: React.FC<{wells: WellPoint[]}> = ({wells}) => {
   const map = useMap();
+  const [fitted, setFitted] = useState(false);
   useEffect(() => {
-    const pts: [number,number][] = [
-      ...wells.filter(w=>isValidCoordinate(w.lat,w.lng)).map(w=>[w.lat,w.lng] as [number,number]),
-      ...(cands||[]).filter(c=>isValidCoordinate(c.lat,c.lng)).map(c=>[c.lat,c.lng] as [number,number]),
-    ];
-    if (candidateLocation && isValidCoordinate(candidateLocation.lat,candidateLocation.lng))
-      pts.push([candidateLocation.lat, candidateLocation.lng]);
+    if (fitted || wells.length === 0) return;
+    const pts = wells.filter(w=>isValidCoordinate(w.lat,w.lng)).map(w=>[w.lat,w.lng] as [number,number]);
     if (!pts.length) return;
     const b = L.latLngBounds(pts);
-    if (b.isValid()) map.fitBounds(b, {padding:[48,48], maxZoom:11});
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wells.length, cands?.length, candidateLocation]);
+    if (b.isValid()) {
+      map.fitBounds(b, {padding:[48,48], maxZoom:11});
+      setFitted(true);
+    }
+  }, [wells, fitted, map]);
+  return null;
+};
+
+const BoundsController: React.FC<{bounds?: [[number,number],[number,number]] | null}> = ({bounds}) => {
+  const map = useMap();
+  useEffect(() => {
+    if (!bounds) return;
+    const b = L.latLngBounds(bounds);
+    if (b.isValid()) map.fitBounds(b, {padding:[48,48], maxZoom:12});
+  }, [bounds, map]);
   return null;
 };
 
@@ -316,6 +328,8 @@ interface FieldMapProps {
   flyToLocation?: { lat: number; lng: number; zoom?: number } | null;
   selectedCandData?: any;
   visibleArrowCount?: number;
+  selectionMode?: boolean;
+  regionBounds?: [[number,number],[number,number]] | null;
 }
 
 // ── Main FieldMap ─────────────────────────────────────────────────────────────
@@ -323,6 +337,7 @@ export const FieldMap: React.FC<FieldMapProps> = ({
   wells, candidates, onWellClick, onCandidateClick,
   candidateLocation, onMapClick, selectedWellId,
   selectedCandId, flyToLocation, selectedCandData, visibleArrowCount = 0,
+  selectionMode = false, regionBounds = null
 }) => {
   const navigate = useNavigate();
   const [selWell, setSelWell] = useState<string|null>(selectedWellId||null);
@@ -360,15 +375,14 @@ export const FieldMap: React.FC<FieldMapProps> = ({
   }, [wells]);
 
   const supportingSet = useMemo(() => {
-    const map = new Map<string, any>();
+    const map = new Map<string, { data: any, rank: number }>();
     if (selectedCandData?.supporting_wells) {
-      selectedCandData.supporting_wells.slice(0, 5).forEach((sw: any) => map.set(sw.well_id, sw));
+      selectedCandData.supporting_wells.slice(0, 5).forEach((sw: any, idx: number) => map.set(sw.well_id, { data: sw, rank: idx }));
     }
     return map;
   }, [selectedCandData]);
 
   const selCandObj = (candidates||[]).find(c => c.id === selCand);
-  const primaryInfluencingId = selectedCandData?.supporting_wells?.[0]?.well_id;
 
   const handleWellClick = (well: WellPoint) => {
     setSelWell(well.id);
@@ -376,7 +390,7 @@ export const FieldMap: React.FC<FieldMapProps> = ({
     setQuickCardWell({
       ...well,
       supportingEvidence: supp ? {
-        distance: supp.distance_km,
+        distance: supp.data.distance_km,
         similarity: selectedCandData.historical_similarity,
         candLabel: selectedCandData.candidate_label
       } : undefined
@@ -397,17 +411,18 @@ export const FieldMap: React.FC<FieldMapProps> = ({
   };
 
   return (
-    <div style={{ position:'relative', height:'100%', width:'100%' }}>
+    <div style={{ position:'relative', height:'100%', width:'100%', cursor: selectionMode ? 'crosshair' : 'default' }}>
       <MapContainer
         center={[22, 78]} zoom={5}
-        style={{ height:'100%', width:'100%', background:'#0A0A0A' }}
+        style={{ height:'100%', width:'100%', background:'#0A0A0A', cursor: selectionMode ? 'crosshair' : '' }}
         scrollWheelZoom
       >
         <TileLayer
           attribution='&copy; <a href="https://stadiamaps.com/">Stadia Maps</a>'
           url="https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png"
         />
-        <MapFitter wells={wells} cands={candidates} candidateLocation={candidateLocation}/>
+        <MapFitter wells={wells} />
+        <BoundsController bounds={regionBounds} />
         <MapClickHandler onMapClick={onMapClick}/>
         {flyToLocation && <CameraController center={flyToLocation} zoom={flyToLocation.zoom}/>}
 
@@ -476,11 +491,12 @@ export const FieldMap: React.FC<FieldMapProps> = ({
         {wells.map(well => {
           if (!isValidCoordinate(well.lat, well.lng)) return null;
           const isInfluencing = supportingSet.has(well.id);
-          const isPrimaryInfluencing = isInfluencing && primaryInfluencingId === well.id;
-          const suppData = isInfluencing ? supportingSet.get(well.id) : null;
+          const influencingRank = isInfluencing ? supportingSet.get(well.id)!.rank : null;
+          const isPrimaryInfluencing = influencingRank === 0;
+          const suppData = isInfluencing ? supportingSet.get(well.id)!.data : null;
           return (
             <Marker key={well.id} position={[well.lat, well.lng]}
-              icon={makeWellIcon(well.status, well.risk, selWell===well.id, isInfluencing, isPrimaryInfluencing, !!selectedCandId)}
+              icon={makeWellIcon(well.status, well.risk, selWell===well.id, isInfluencing, influencingRank, !!selectedCandId)}
               eventHandlers={{ click: () => handleWellClick(well) }}>
               <Tooltip direction="top" offset={[0,-12]} className="nwis-tooltip">
                 <div style={{ fontFamily:'Inter,sans-serif', fontSize:'11px', lineHeight:'1.6', minWidth:'150px' }}>

@@ -140,11 +140,7 @@ def evaluate_candidate(request: CandidateRequest, db: Session = Depends(get_db))
     return result
 
 
-# Gujarat field identifiers discovered from DB keywords — no hardcoded coordinates
-GUJARAT_FIELD_KEYWORDS = ["gujarat", "cambay", "kadi", "sanchor"]
 
-def _is_gujarat_field(field_name: str) -> bool:
-    return any(kw in (field_name or "").lower() for kw in GUJARAT_FIELD_KEYWORDS)
 
 
 # ---------------------------------------------------------------------------
@@ -167,8 +163,7 @@ def get_recommended_candidates(field_name: str = None, db: Session = Depends(get
 
     logger.info(f"[CANDIDATE ENGINE] Fields discovered: {list(field_groups.keys())}")
 
-    # Per-field: generate grid, evaluate, keep best candidate
-    field_best: dict = {}
+    all_scored = []
 
     for fn, fwells in field_groups.items():
         if len(fwells) < 3:
@@ -179,8 +174,6 @@ def get_recommended_candidates(field_name: str = None, db: Session = Depends(get
         logger.info(f"[CANDIDATE ENGINE] {fn}: {len(grid)} grid candidates")
 
         if not grid:
-            if _is_gujarat_field(fn):
-                logger.info(f"[Gujarat] No valid candidate grid for {fn}.")
             continue
 
         scored = []
@@ -192,34 +185,39 @@ def get_recommended_candidates(field_name: str = None, db: Session = Depends(get
 
         if scored:
             scored.sort(key=lambda x: x["overall_suitability"], reverse=True)
-            field_best[fn] = scored[0]
             logger.info(f"[CANDIDATE ENGINE] {fn}: best={scored[0]['overall_suitability']}")
-        else:
-            if _is_gujarat_field(fn):
-                logger.info(f"[Gujarat] No valid candidate met minimum criteria for {fn}.")
+            all_scored.extend(scored)
 
-    if not field_best:
+    if not all_scored:
         return {"candidates": [], "message": "No valid candidate locations found across any field."}
 
-    # Diverse Top-3: guarantee Gujarat slot when eligible, fill rest by suitability
-    gujarat_cands = [(fn, c) for fn, c in field_best.items() if _is_gujarat_field(fn)]
-    other_cands   = [(fn, c) for fn, c in field_best.items() if not _is_gujarat_field(fn)]
-
-    gujarat_cands.sort(key=lambda x: x[1]["overall_suitability"], reverse=True)
-    other_cands.sort(key=lambda x: x[1]["overall_suitability"], reverse=True)
+    all_scored.sort(key=lambda x: x["overall_suitability"], reverse=True)
 
     selected = []
+    seen_fields = set()
 
-    if gujarat_cands:
-        selected.append(gujarat_cands[0][1])
-        logger.info(f"[CANDIDATE ENGINE] Gujarat slot filled: {gujarat_cands[0][0]}")
-
-    remaining = other_cands + gujarat_cands[1:]
-    remaining.sort(key=lambda x: x[1]["overall_suitability"], reverse=True)
-    for _, cand in remaining:
+    for cand in all_scored:
         if len(selected) >= 3:
             break
-        selected.append(cand)
+            
+        is_duplicate = any(abs(c["latitude"] - cand["latitude"]) < 0.001 and abs(c["longitude"] - cand["longitude"]) < 0.001 for c in selected)
+        if is_duplicate:
+            continue
+
+        if cand["field_name"] not in seen_fields:
+            selected.append(cand)
+            seen_fields.add(cand["field_name"])
+        else:
+            best_unseen_score = max([c["overall_suitability"] for c in all_scored if c["field_name"] not in seen_fields], default=0)
+            if cand["overall_suitability"] >= best_unseen_score + 3.0:
+                selected.append(cand)
+
+    for cand in all_scored:
+        if len(selected) >= 3:
+            break
+        is_duplicate = any(abs(c["latitude"] - cand["latitude"]) < 0.001 and abs(c["longitude"] - cand["longitude"]) < 0.001 for c in selected)
+        if not is_duplicate and cand not in selected:
+            selected.append(cand)
 
     selected.sort(key=lambda x: x["overall_suitability"], reverse=True)
 

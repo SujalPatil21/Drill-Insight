@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 # anomaly APIs not yet fully implemented
-from app.api import wells, risk, candidates, rag, dashboard, recommendation, search, reports, debug, auth
+from app.api import wells, risk, candidates, rag, dashboard, recommendation, search, reports, debug, auth, historical
 
 
 app = FastAPI(title="NWIS - Nearby Wells Intelligence System", version="1.0.0")
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -80,3 +80,4 @@ app.include_router(search.router, prefix="/api", tags=["search"])
 app.include_router(reports.router, prefix="/api/reports", tags=["reports"])
 app.include_router(debug.router, prefix="/api/debug", tags=["debug"])
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
+app.include_router(historical.router, prefix="/api/historical", tags=["historical"])

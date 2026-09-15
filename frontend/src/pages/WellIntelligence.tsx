@@ -1,5 +1,5 @@
 import { useParams, useNavigate } from "react-router-dom";
-import { useWellIntelligence, useWellObservations, useWellRecommendation, useWellEvents } from "../api";
+import { useWellIntelligence, useWellObservations, useWellRecommendation, useWellEvents, downloadWellReport } from "../api";
 import { Activity, AlertTriangle, FileText, Download, ShieldAlert, Cpu, ArrowLeft, RefreshCw } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
@@ -101,7 +101,7 @@ export function WellIntelligence() {
           </div>
           <p className="text-text-secondary text-sm">{well?.well_name} • {well?.field_name}</p>
         </div>
-        <button onClick={() => wellId && window.open(`http://localhost:8000/api/reports/${wellId}/pdf`, '_blank')}
+        <button onClick={() => wellId && downloadWellReport(wellId)}
           className="flex items-center gap-2 bg-surface border border-border text-text-secondary px-3 py-1.5 rounded hover:border-primary/50 hover:text-text-primary transition-colors text-xs font-bold uppercase tracking-widest">
           <Download size={14} /> Report
         </button>

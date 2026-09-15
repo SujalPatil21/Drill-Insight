@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { BrandLogo } from '../components/ui/BrandLogo';
 import HompageImg from '../assets/Homepageimage.jpg';
 
 type Mode = 'login' | 'register';
@@ -59,7 +60,7 @@ export function Login() {
       }
     } catch (err: any) {
       const msg = err?.message || 'Unable to connect to NWIS authentication service.';
-      if (msg.includes('fetch') || msg.includes('network') || msg.includes('Failed')) {
+      if (msg.includes('fetch') || msg.includes('network') || msg.includes('Failed to fetch')) {
         setError('Unable to connect to NWIS authentication service.');
       } else {
         setError(msg);
@@ -106,18 +107,7 @@ export function Login() {
 
         {/* NWIS wordmark top-left */}
         <div style={{ position: 'absolute', top: 36, left: 48, zIndex: 2 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-              <path d="M14 2 L26 14 L14 26 L2 14 Z" fill="#087F73" stroke="#13A89E" strokeWidth="1.2" />
-              <circle cx="14" cy="14" r="3" fill="#0A0A0A" />
-            </svg>
-            <span style={{ color: '#F5F5F2', fontWeight: 800, fontSize: 18, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
-              NWIS
-            </span>
-          </div>
-          <div style={{ color: '#737373', fontSize: 10, letterSpacing: '0.18em', textTransform: 'uppercase', marginTop: 4, marginLeft: 38 }}>
-            Nearby Wells Intelligence System
-          </div>
+          <BrandLogo />
         </div>
 
         {/* Bottom branding text */}

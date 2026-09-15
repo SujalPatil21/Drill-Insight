@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "../ui/Button";
 import { cn } from "../../lib/utils";
+import { BrandLogo } from "../ui/BrandLogo";
 
 export function LandingNavbar() {
   const [scrolled, setScrolled] = useState(false);
@@ -25,14 +26,7 @@ export function LandingNavbar() {
     >
       <div className="container mx-auto px-6 max-w-7xl flex items-center justify-between">
         {/* Brand */}
-        <div className="flex flex-col">
-          <Link to="/" className="text-xl font-bold tracking-tight text-foreground hover:text-primary transition-colors">
-            NWIS
-          </Link>
-          <span className="text-[10px] font-medium text-text-secondary uppercase tracking-widest hidden sm:block mt-0.5">
-            Nearby Wells Intelligence System
-          </span>
-        </div>
+        <BrandLogo isLink={true} hideTextOnMobile={true} />
 
         {/* Links */}
         <div className="hidden md:flex items-center space-x-8">

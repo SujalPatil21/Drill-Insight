@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 
-const API_BASE = 'http://localhost:8000/api';
+export const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api';
 
 const fetchWithLogs = async (endpoint: string, options: any = {}) => {
   const method = options.method || 'GET';

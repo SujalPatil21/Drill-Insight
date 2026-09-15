@@ -15,6 +15,7 @@ import {
 import { LandingPage } from './pages/LandingPage';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { Login } from './pages/Login';
+import { API_BASE } from './api';
 
 // ── Sidebar ───────────────────────────────────────────────────────────────────
 const Sidebar = () => {
@@ -126,7 +127,7 @@ const Topbar = () => {
       setIsSearching(true);
       setError(null);
       try {
-        const res = await fetch(`http://localhost:8000/api/search?q=${encodeURIComponent(query)}`, { credentials: 'include' });
+        const res = await fetch(`${API_BASE}/search?q=${encodeURIComponent(query)}`, { credentials: 'include' });
         if (!res.ok) throw new Error('Search failed');
         const data = await res.json();
         setResults(data.results || []);

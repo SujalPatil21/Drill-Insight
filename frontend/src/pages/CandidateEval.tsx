@@ -1,9 +1,9 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FieldMap } from '../components/map/FieldMap';
 import type { WellPoint, CandidatePoint } from '../components/map/types';
-import { MapPin, Target, Sparkles, RefreshCw } from 'lucide-react';
-import { evaluateCandidate as apiEvaluate, getRecommendedCandidates, useWells } from '../api';
+import { Target, Sparkles, RefreshCw, MapPin, Crosshair, CheckCircle, Map, ChevronRight } from 'lucide-react';
+import { getRecommendedCandidates, evaluateCandidate, useWells } from '../api';
 
 function ScoreBar({ label, value }: { label: string; value: number }) {
   const color = value >= 80 ? '#087F73' : value >= 65 ? '#C78A2C' : '#737373';
@@ -38,10 +38,10 @@ export const CandidateEval = () => {
   const navigate = useNavigate();
   const { data: wellsData } = useWells();
 
-  const [mode, setMode] = useState<'idle' | 'manual' | 'recommended'>('idle');
-  const [candidate, setCandidate] = useState<{ lat: number; lng: number } | null>(null);
-  const [evalResult, setEvalResult] = useState<any>(null);
-  const [loading, setLoading] = useState(false);
+  // 'idle' | 'selecting' | 'select_result' | 'recommended'
+  const [mode, setMode] = useState<'idle' | 'selecting' | 'select_result' | 'recommended'>('idle');
+
+  // FIND RECOMMENDED LOCATIONS state
   const [recLoading, setRecLoading] = useState(false);
   const [recommendations, setRecommendations] = useState<any[]>([]);
   const [selectedCand, setSelectedCand] = useState<any>(null);
@@ -53,15 +53,16 @@ export const CandidateEval = () => {
   // Evidence arrows — staggered reveal count
   const [visibleArrowCount, setVisibleArrowCount] = useState(0);
 
-  // Auto-select Candidate A when recommendations arrive
-  useEffect(() => {
-    if (recommendations.length > 0 && !selectedCand) {
-      const first = recommendations[0];
-      console.log(`[CANDIDATE SELECT] candidate=${first.candidate_label} lat=${first.latitude} lng=${first.longitude}`);
-      setSelectedCand(first);
-      setFlyTo({ lat: first.latitude, lng: first.longitude, zoom: 11 });
-    }
-  }, [recommendations]);
+  // SELECT LOCATION state
+  const [selectEvalLoading, setSelectEvalLoading] = useState(false);
+  const [selectEvalResult, setSelectEvalResult] = useState<any>(null);
+  const [selectEvalError, setSelectEvalError] = useState<string | null>(null);
+  const [engineerLocation, setEngineerLocation] = useState<{ lat: number; lng: number } | null>(null);
+  
+  // SELECT REGION state
+  const [isRegionSelectorOpen, setIsRegionSelectorOpen] = useState(false);
+  const [selectedRegion, setSelectedRegion] = useState<string | null>(null);
+  const [regionBounds, setRegionBounds] = useState<[[number,number],[number,number]] | null>(null);
 
   const mapWells: WellPoint[] = wellsData ? wellsData.map((w: any) => ({
     id: w.well_id,
@@ -85,13 +86,11 @@ export const CandidateEval = () => {
     supportingWells: r.supporting_wells?.map((sw: any) => ({ lat: sw.latitude, lng: sw.longitude })) || [],
   }));
 
-  // Influencing well IDs for the selected candidate (top 3-5 by proximity)
   const influencingWellIds: string[] = selectedCand?.supporting_wells
     ?.slice(0, 5)
     .map((sw: any) => sw.well_id)
     .filter(Boolean) || [];
 
-  // Debug logging
   useEffect(() => {
     if (selectedCand) {
       console.log(`[CANDIDATE EVIDENCE] candidate=${selectedCand.candidate_label}`);
@@ -102,48 +101,19 @@ export const CandidateEval = () => {
     }
   }, [selectedCand, influencingWellIds]);
 
-
-
-  const handleMapClick = (lat: number, lng: number) => {
-    setMode('manual');
-    setCandidate({ lat, lng });
-    setEvalResult(null);
-    setSelectedCand(null);
-    setError(null);
-  };
-
-  const runEvaluate = async () => {
-    if (!candidate) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await apiEvaluate(candidate.lat, candidate.lng);
-      setEvalResult(res);
-    } catch (e: any) {
-      setError('Evaluation failed. Please try again.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const runRecommended = async () => {
     setMode('recommended');
     setRecLoading(true);
     setRecommendations([]);
     setSelectedCand(null);
-    setEvalResult(null);
     setError(null);
+    setEngineerLocation(null);
+    setSelectEvalResult(null);
+    setSelectEvalError(null);
     try {
       const res = await getRecommendedCandidates();
       const cands = res.candidates || [];
       setRecommendations(cands);
-      // Auto-select first candidate after load
-      if (cands.length > 0) {
-        const first = cands[0];
-        console.log(`[CANDIDATE SELECT] candidate=${first.candidate_label} lat=${first.latitude} lng=${first.longitude}`);
-        setSelectedCand(first);
-        setFlyTo({ lat: first.latitude, lng: first.longitude, zoom: 11 });
-      }
     } catch (e: any) {
       setError('Unable to generate recommended locations. Please try again.');
     } finally {
@@ -151,18 +121,57 @@ export const CandidateEval = () => {
     }
   };
 
+  const enterSelectionMode = () => {
+    setMode('selecting');
+    setRecommendations([]);
+    setSelectedCand(null);
+    setError(null);
+    setSelectEvalResult(null);
+    setSelectEvalError(null);
+    setEngineerLocation(null);
+  };
+
+  const handleMapClick = useCallback(async (lat: number, lng: number) => {
+    if (mode !== 'selecting') return;
+
+    console.log(`[SELECT LOCATION] Engineer clicked lat=${lat.toFixed(6)} lng=${lng.toFixed(6)}`);
+    setEngineerLocation({ lat, lng });
+    setSelectEvalLoading(true);
+    setSelectEvalError(null);
+    setSelectEvalResult(null);
+    setMode('select_result');
+    // Removed setFlyTo so map viewport is preserved
+
+    try {
+      const result = await evaluateCandidate(lat, lng);
+      console.log(`[SELECT LOCATION] Evaluation complete: suitability=${result.overall_suitability}`);
+      setSelectEvalResult(result);
+      
+      // Reveal evidence arrows sequentially
+      setVisibleArrowCount(0);
+      const total = Math.min(result.supporting_wells?.length || 0, 5);
+      for (let i = 1; i <= total; i++) {
+        setTimeout(() => setVisibleArrowCount(i), i * 130);
+      }
+    } catch (e: any) {
+      console.error('[SELECT LOCATION] Evaluation failed', e);
+      setSelectEvalError('Could not evaluate this location. Ensure the backend is running and the location is within a mapped field.');
+    } finally {
+      setSelectEvalLoading(false);
+    }
+  }, [mode]);
+
   const handleCandidateClick = (candId: string) => {
     console.log(`[CANDIDATE SELECT] from map marker, candidate=${candId}`);
     const c = recommendations.find(r => r.candidate_id === candId);
     if (c) {
       setSelectedCand(c);
       setVisibleArrowCount(0);
-      setFlyTo({ lat: c.latitude, lng: c.longitude, zoom: 11 });
+      // Removed setFlyTo so map viewport is preserved when clicking a marker
       const total = Math.min(c.supporting_wells?.length || 0, 5);
       for (let i = 1; i <= total; i++) {
         setTimeout(() => setVisibleArrowCount(i), i * 130);
       }
-      // Scroll the card into view
       setTimeout(() => {
         cardRefs.current[candId]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       }, 200);
@@ -176,7 +185,6 @@ export const CandidateEval = () => {
     setVisibleArrowCount(0);
     if (toggled) {
       setFlyTo({ lat: toggled.latitude, lng: toggled.longitude, zoom: 11 });
-      // Stagger arrow reveals: +1 every 130ms
       const total = Math.min(toggled.supporting_wells?.length || 0, 5);
       for (let i = 1; i <= total; i++) {
         setTimeout(() => setVisibleArrowCount(i), i * 130);
@@ -184,9 +192,43 @@ export const CandidateEval = () => {
     }
   };
 
+  const isSelecting = mode === 'selecting';
+  const activeCandidateMarkers = mode === 'recommended' ? candidateMarkers : (mode === 'select_result' && selectEvalResult ? [{
+    id: selectEvalResult.candidate_id,
+    label: selectEvalResult.candidate_label || 'EVAL',
+    lat: selectEvalResult.latitude,
+    lng: selectEvalResult.longitude,
+    suitability: selectEvalResult.overall_suitability,
+    risk: selectEvalResult.drilling_risk?.level || 'LOW',
+    supportingWells: selectEvalResult.supporting_wells?.map((sw: any) => ({ lat: sw.latitude, lng: sw.longitude })) || [],
+  }] : []);
+  const activeCandId = mode === 'recommended' ? (selectedCand?.candidate_id ?? null) : (mode === 'select_result' ? selectEvalResult?.candidate_id : null);
+  const activeCandData = mode === 'recommended' ? selectedCand : (mode === 'select_result' ? selectEvalResult : null);
+  const activeVisibleArrows = (mode === 'recommended' || mode === 'select_result') ? visibleArrowCount : 0;
+  const activeEngineerLocation = (mode === 'select_result' || mode === 'selecting') ? engineerLocation : null;
+  const activeMapClick = mode === 'selecting' ? handleMapClick : undefined;
+
+  const uniqueRegions = Array.from(new Set(mapWells.map(w => w.field_name).filter(Boolean))).sort();
+
+  const handleSelectRegion = (region: string) => {
+    setIsRegionSelectorOpen(false);
+    setSelectedRegion(region);
+    
+    const regionWells = mapWells.filter(w => w.field_name === region && w.lat && w.lng);
+    if (regionWells.length > 0) {
+      let minLat = 90, maxLat = -90, minLng = 180, maxLng = -180;
+      regionWells.forEach(w => {
+        if (w.lat < minLat) minLat = w.lat;
+        if (w.lat > maxLat) maxLat = w.lat;
+        if (w.lng < minLng) minLng = w.lng;
+        if (w.lng > maxLng) maxLng = w.lng;
+      });
+      setRegionBounds([[minLat, minLng], [maxLat, maxLng]]);
+    }
+  };
+
   return (
     <div className="p-6 h-full flex flex-col">
-      {/* Header */}
       <div className="mb-4">
         <h2 className="text-2xl font-bold mb-1 tracking-tight">Candidate Location Evaluation</h2>
         <p className="text-text-secondary text-sm">
@@ -194,127 +236,300 @@ export const CandidateEval = () => {
         </p>
       </div>
 
-      {/* Mode Controls */}
       <div className="flex items-center gap-3 mb-4">
         <button
-          onClick={() => { setMode('manual'); setRecommendations([]); setSelectedCand(null); setEvalResult(null); }}
-          className={`flex items-center gap-2 px-4 py-2 rounded text-sm font-bold uppercase tracking-widest transition-colors border ${mode === 'manual' ? 'bg-primary text-white border-primary' : 'border-border text-text-secondary hover:border-primary/40 hover:text-text-primary'}`}
+          onClick={enterSelectionMode}
+          disabled={selectEvalLoading}
+          className={`flex items-center gap-2 px-4 py-2 rounded text-sm font-bold uppercase tracking-widest transition-all border disabled:opacity-50 disabled:cursor-not-allowed ${
+            mode === 'selecting'
+              ? 'bg-amber-500/20 border-amber-500 text-amber-400 shadow-[0_0_12px_rgba(245,158,11,0.3)]'
+              : mode === 'select_result'
+              ? 'border-amber-600/50 text-amber-500/80 hover:bg-amber-500/10 hover:border-amber-500'
+              : 'border-border text-text-secondary hover:border-amber-500/60 hover:text-amber-400'
+          }`}
         >
-          <MapPin size={14} /> Select Location
+          {mode === 'selecting' ? (
+            <>
+              <Crosshair size={14} className="animate-pulse" />
+              Selecting…
+            </>
+          ) : mode === 'select_result' && !selectEvalLoading ? (
+            <>
+              <CheckCircle size={14} />
+              Location Selected
+            </>
+          ) : (
+            <>
+              <MapPin size={14} />
+              Select Location
+            </>
+          )}
         </button>
+
         <button
           onClick={runRecommended}
           disabled={recLoading}
-          className="flex items-center gap-2 px-4 py-2 rounded text-sm font-bold uppercase tracking-widest transition-colors border border-primary text-primary hover:bg-primary hover:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+          className={`flex items-center gap-2 px-4 py-2 rounded text-sm font-bold uppercase tracking-widest transition-all border disabled:opacity-50 disabled:cursor-not-allowed ${
+            mode === 'recommended'
+              ? 'bg-primary/10 border-primary text-primary shadow-[0_0_12px_rgba(8,127,115,0.25)]'
+              : 'border-border text-text-secondary hover:border-primary/60 hover:text-primary'
+          }`}
         >
           <Sparkles size={14} />
           {recLoading ? 'Analyzing...' : 'Find Recommended Locations'}
         </button>
+
+        <div className="relative">
+          <button
+            onClick={() => setIsRegionSelectorOpen(!isRegionSelectorOpen)}
+            className="flex items-center gap-2 px-4 py-2 rounded text-sm font-bold uppercase tracking-widest transition-all border border-border text-text-secondary hover:border-primary/60 hover:text-primary"
+          >
+            <Map size={14} />
+            Select Region
+          </button>
+          
+          {isRegionSelectorOpen && (
+            <div className="absolute top-full left-0 mt-2 w-56 bg-surface border border-border rounded shadow-xl z-50 py-2 flex flex-col max-h-64 overflow-y-auto">
+              <div className="text-[10px] font-bold text-text-secondary uppercase tracking-widest px-3 py-1 mb-1 border-b border-border">Regions</div>
+              {uniqueRegions.length === 0 ? (
+                <div className="px-3 py-2 text-xs text-text-muted">Loading...</div>
+              ) : (
+                uniqueRegions.map(region => (
+                  <button
+                    key={region}
+                    onClick={() => handleSelectRegion(region)}
+                    className="flex items-center justify-between px-3 py-2 text-left text-xs text-text-secondary hover:bg-surface-hover hover:text-primary transition-colors"
+                  >
+                    <span>{region}</span>
+                    <ChevronRight size={12} className="opacity-50" />
+                  </button>
+                ))
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
+      {mode === 'selecting' && (
+        <div className="mb-4 flex items-center gap-3 px-4 py-3 rounded border border-amber-500/40 bg-amber-500/10 text-amber-300 text-sm animate-in fade-in duration-200">
+          <Crosshair size={16} className="shrink-0 animate-pulse" />
+          <span>
+            <span className="font-bold">Click anywhere within the mapped field</span> to evaluate a proposed drilling location.
+          </span>
+        </div>
+      )}
+
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-6 min-h-0">
-        {/* Map */}
-        <div className="lg:col-span-2 bg-surface rounded-lg border border-border overflow-hidden relative z-0" style={{ minHeight: '400px' }}>
-          {recLoading && (
+        <div
+          className={`lg:col-span-2 bg-surface rounded-lg border overflow-hidden relative z-0 transition-colors ${
+            isSelecting ? 'border-amber-500/50' : 'border-border'
+          }`}
+          style={{ minHeight: '400px' }}
+        >
+          {selectedRegion && (
+            <div className="absolute top-4 left-4 z-[400] bg-surface/90 backdrop-blur border border-border rounded px-3 py-1.5 shadow-lg pointer-events-none">
+              <div className="text-[9px] text-text-secondary uppercase tracking-widest mb-0.5">Selected Region</div>
+              <div className="text-xs font-bold text-primary uppercase tracking-wide">{selectedRegion}</div>
+            </div>
+          )}
+          
+          {(recLoading || selectEvalLoading) && (
             <div className="absolute inset-0 z-10 bg-black/60 flex flex-col items-center justify-center space-y-3 text-sm text-text-secondary">
               <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-              <div className="animate-pulse">Analyzing field context...</div>
+              <div className="animate-pulse">
+                {recLoading ? 'Analyzing field context…' : 'Evaluating location…'}
+              </div>
             </div>
           )}
           <FieldMap
             wells={mapWells}
-            candidates={candidateMarkers}
-            candidateLocation={mode === 'manual' ? candidate : null}
-            onMapClick={mode === 'manual' || mode === 'idle' ? handleMapClick : undefined}
+            candidates={activeCandidateMarkers}
+            candidateLocation={activeEngineerLocation}
+            onMapClick={activeMapClick}
             onCandidateClick={handleCandidateClick}
-            selectedCandId={selectedCand?.candidate_id ?? null}
+            selectedCandId={activeCandId}
             flyToLocation={flyTo}
-            selectedCandData={selectedCand}
-            visibleArrowCount={visibleArrowCount}
+            selectedCandData={activeCandData}
+            visibleArrowCount={activeVisibleArrows}
+            selectionMode={isSelecting}
+            regionBounds={regionBounds}
           />
         </div>
 
-        {/* Right Panel */}
         <div className="bg-surface rounded-lg border border-border p-4 flex flex-col overflow-y-auto">
-
-          {/* Manual Mode Panel */}
-          {mode === 'manual' && (
+          {mode === 'select_result' && (
             <>
               <h3 className="font-semibold text-sm uppercase tracking-widest text-text-secondary border-b border-border pb-3 mb-4 flex items-center gap-2">
-                <Target size={14} className="text-primary" /> Evaluation Panel
+                <MapPin size={14} className="text-amber-400" />
+                <span className="text-amber-400">Engineer-Selected Location</span>
               </h3>
 
-              {!candidate ? (
-                <div className="flex flex-col items-center justify-center flex-1 text-center text-text-secondary py-10">
-                  <MapPin size={40} className="mb-4 opacity-20" />
-                  <p className="text-sm">Click anywhere on the map<br />to place a candidate location.</p>
+              {selectEvalLoading && (
+                <div className="flex flex-col items-center justify-center flex-1 py-10 space-y-3 text-text-secondary text-sm">
+                  <div className="w-8 h-8 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
+                  <div className="animate-pulse">Evaluating location…</div>
                 </div>
-              ) : (
-                <div className="flex flex-col space-y-4">
-                  <div className="bg-background rounded p-3 border border-border text-xs font-mono">
-                    <div className="flex justify-between mb-1">
-                      <span className="text-text-secondary">Latitude</span>
-                      <span>{candidate.lat.toFixed(5)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-text-secondary">Longitude</span>
-                      <span>{candidate.lng.toFixed(5)}</span>
+              )}
+
+              {selectEvalError && !selectEvalLoading && (
+                <div className="space-y-3 py-4">
+                  <p className="text-danger text-sm">{selectEvalError}</p>
+                  <button
+                    onClick={enterSelectionMode}
+                    className="flex items-center gap-2 text-sm text-primary hover:underline"
+                  >
+                    <RefreshCw size={12} /> Try another location
+                  </button>
+                </div>
+              )}
+
+              {selectEvalResult && !selectEvalLoading && (
+                <div className="space-y-3 animate-in fade-in duration-300">
+                  <div className="bg-background rounded p-2.5 border border-border font-mono text-[10px] flex gap-4">
+                    <div><span className="text-text-secondary">LAT </span>{selectEvalResult.latitude?.toFixed(6)}</div>
+                    <div><span className="text-text-secondary">LNG </span>{selectEvalResult.longitude?.toFixed(6)}</div>
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <span className="text-text-secondary text-xs">Overall Suitability</span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-lg" style={{
+                        color: selectEvalResult.overall_suitability >= 80 ? '#087F73'
+                          : selectEvalResult.overall_suitability >= 65 ? '#C78A2C' : '#737373'
+                      }}>
+                        {selectEvalResult.overall_suitability}/100
+                      </span>
+                      {selectEvalResult.drilling_risk?.level && (
+                        <RiskBadge level={selectEvalResult.drilling_risk.level} />
+                      )}
                     </div>
                   </div>
 
-                  <button onClick={runEvaluate} disabled={loading}
-                    className="w-full bg-primary hover:bg-primary-hover text-white font-bold py-2 px-4 rounded text-sm uppercase tracking-widest transition-colors disabled:opacity-50">
-                    {loading ? 'Evaluating...' : 'Evaluate Candidate'}
-                  </button>
+                  <div className="h-2 bg-border rounded-full overflow-hidden">
+                    <div
+                      style={{
+                        width: `${selectEvalResult.overall_suitability}%`,
+                        background: selectEvalResult.overall_suitability >= 80 ? '#087F73'
+                          : selectEvalResult.overall_suitability >= 65 ? '#C78A2C' : '#737373',
+                        transition: 'width 0.7s ease'
+                      }}
+                      className="h-full rounded-full"
+                    />
+                  </div>
 
-                  {error && <p className="text-danger text-xs">{error}</p>}
+                  {selectEvalResult.recommendation && (
+                    <p className="text-xs text-text-secondary italic border-l-2 border-primary/40 pl-2">
+                      {selectEvalResult.recommendation}
+                    </p>
+                  )}
 
-                  {evalResult && !evalResult.suitability_label?.includes('INSUFFICIENT') && (
-                    <div className="animate-in fade-in slide-in-from-bottom-2 duration-300 space-y-4">
-                      <div className="bg-background border border-border rounded p-4 text-center">
-                        <div className="text-text-secondary text-[10px] uppercase tracking-widest mb-1">Overall Suitability</div>
-                        <div className="text-3xl font-bold text-primary">{evalResult.overall_suitability}<span className="text-sm text-text-secondary">/100</span></div>
-                        <div className="text-xs text-text-secondary mt-1">{evalResult.suitability_label}</div>
+                  <div className="border-t border-border pt-3 space-y-1">
+                    {selectEvalResult.geological_suitability !== undefined && (
+                      <ScoreBar label="Geological Suitability" value={selectEvalResult.geological_suitability} />
+                    )}
+                    {selectEvalResult.reservoir_quality !== undefined && (
+                      <ScoreBar label="Reservoir Quality" value={selectEvalResult.reservoir_quality} />
+                    )}
+                    {selectEvalResult.formation_continuity !== undefined && (
+                      <ScoreBar label="Formation Continuity" value={selectEvalResult.formation_continuity} />
+                    )}
+                    {selectEvalResult.historical_risk_score !== undefined && (
+                      <ScoreBar label="Historical / Offset Evidence" value={selectEvalResult.historical_risk_score} />
+                    )}
+                    {selectEvalResult.spatial_confidence !== undefined && (
+                      <ScoreBar label="Spatial Confidence" value={selectEvalResult.spatial_confidence} />
+                    )}
+                  </div>
+
+                  {selectEvalResult.nearby_wells_count !== undefined && (
+                    <div className="border-t border-border pt-3 space-y-1">
+                      <div className="flex justify-between text-xs">
+                        <span className="text-text-secondary">Nearby Supporting Wells</span>
+                        <span>{selectEvalResult.nearby_wells_count}</span>
                       </div>
-
-                      <div className="space-y-1">
-                        <ScoreBar label="Geological Suitability" value={evalResult.geological_suitability} />
-                        <ScoreBar label="Reservoir Quality" value={evalResult.reservoir_quality} />
-                        <ScoreBar label="Formation Continuity" value={evalResult.formation_continuity} />
-                        <ScoreBar label="Offset Evidence" value={evalResult.offset_evidence} />
-                        <ScoreBar label="Spatial Confidence" value={evalResult.spatial_confidence} />
-                      </div>
-
-                      <div className="flex justify-between items-center">
-                        <span className="text-xs text-text-secondary">Drilling Risk</span>
-                        <RiskBadge level={evalResult.drilling_risk?.level || 'LOW'} />
-                      </div>
-
-                      <div className="bg-background rounded border border-border p-3 text-xs">
-                        <div className="font-bold text-primary mb-2 uppercase tracking-wide">Recommendation</div>
-                        <p className="text-text-primary">{evalResult.recommendation}</p>
-                      </div>
-
-                      {evalResult.explanation?.positives?.length > 0 && (
-                        <div className="text-xs space-y-1">
-                          {evalResult.explanation.positives.map((p: string, i: number) => (
-                            <div key={i} className="text-success flex gap-1.5">+ {p}</div>
-                          ))}
-                          {evalResult.explanation.concerns.map((c: string, i: number) => (
-                            <div key={i} className="text-warning flex gap-1.5">⚠ {c}</div>
-                          ))}
+                      {selectEvalResult.nearest_well && (
+                        <div className="flex justify-between text-xs">
+                          <span className="text-text-secondary">Nearest Well</span>
+                          <span>{selectEvalResult.nearest_well} ({selectEvalResult.nearest_distance_km} km)</span>
                         </div>
                       )}
-
-                      <p className="text-[10px] text-text-muted border-t border-border pt-2">{evalResult.disclaimer}</p>
+                      {selectEvalResult.historical_similarity !== undefined && (
+                        <div className="flex justify-between text-xs">
+                          <span className="text-text-secondary">Historical Similarity</span>
+                          <span className="text-primary font-bold">{selectEvalResult.historical_similarity}%</span>
+                        </div>
+                      )}
                     </div>
                   )}
+
+                  {selectEvalResult.drilling_risk && (
+                    <div className="border-t border-border pt-3">
+                      <div className="text-[10px] font-bold text-text-secondary uppercase tracking-wide mb-2 flex items-center gap-2">
+                        <Target size={10} /> Drilling Risk
+                      </div>
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[10px]">
+                        {[
+                          ['Mud Loss', selectEvalResult.drilling_risk.mud_loss_events],
+                          ['Stuck Pipe', selectEvalResult.drilling_risk.stuck_pipe_events],
+                          ['Kicks', selectEvalResult.drilling_risk.kick_events],
+                          ['High Torque', selectEvalResult.drilling_risk.high_torque_events],
+                        ].map(([label, val]) => (
+                          <div key={String(label)} className="flex justify-between">
+                            <span className="text-text-secondary">{label}</span>
+                            <span className={Number(val) > 0 ? 'text-warning' : 'text-text-muted'}>{val}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {selectEvalResult.explanation?.positives?.length > 0 && (
+                    <div className="border-t border-border pt-3 text-[10px] space-y-1">
+                      <div className="font-bold text-text-secondary uppercase tracking-wide mb-1">Why this location?</div>
+                      {selectEvalResult.explanation.positives.map((p: string, j: number) => (
+                        <div key={j} className="text-success">+ {p}</div>
+                      ))}
+                      {selectEvalResult.explanation.concerns?.map((c: string, j: number) => (
+                        <div key={j} className="text-warning">⚠ {c}</div>
+                      ))}
+                    </div>
+                  )}
+
+                  {selectEvalResult.supporting_wells?.length > 0 && (
+                    <div className="border-t border-border pt-3 text-[10px]">
+                      <div className="font-bold text-primary uppercase tracking-wide mb-2 flex items-center gap-2">
+                        <Sparkles size={10} /> Nearby Well Evidence
+                      </div>
+                      <div className="space-y-1">
+                        {selectEvalResult.supporting_wells.slice(0, 5).map((sw: any) => (
+                          <div
+                            key={sw.well_id}
+                            onClick={() => navigate(`/dashboard/wells/${sw.well_id}`)}
+                            className="flex justify-between py-1 px-1 hover:bg-surface-hover rounded cursor-pointer border border-transparent hover:border-border transition-colors"
+                          >
+                            <span className="text-text-primary">{sw.well_id}</span>
+                            <span className="text-text-muted">{sw.distance_km} km</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {selectEvalResult.disclaimer && (
+                    <p className="text-[9px] text-text-muted pt-1">{selectEvalResult.disclaimer}</p>
+                  )}
+
+                  <button
+                    onClick={enterSelectionMode}
+                    className="mt-2 w-full flex items-center justify-center gap-2 py-2 rounded border border-amber-500/40 text-amber-400 text-xs font-bold uppercase tracking-widest hover:bg-amber-500/10 transition-colors"
+                  >
+                    <Crosshair size={12} /> Select Another Location
+                  </button>
                 </div>
               )}
             </>
           )}
 
-          {/* Recommended Mode Panel */}
           {mode === 'recommended' && (
             <>
               <h3 className="font-semibold text-sm uppercase tracking-widest text-text-secondary border-b border-border pb-3 mb-4 flex items-center gap-2">
@@ -334,7 +549,6 @@ export const CandidateEval = () => {
                 <div className="text-center py-10 text-text-secondary text-sm">No candidate locations found.</div>
               )}
 
-              {/* Candidate Cards */}
               {recommendations.map((r, i) => (
                 <div
                   key={r.candidate_id}
@@ -376,10 +590,8 @@ export const CandidateEval = () => {
                   </div>
                   <p className="text-[10px] text-text-secondary">{r.recommendation}</p>
 
-                  {/* Expanded detail */}
                   {selectedCand?.candidate_id === r.candidate_id && (
                     <div className="mt-3 pt-3 border-t border-border space-y-2 animate-in fade-in duration-200">
-                      {/* Coordinates */}
                       <div className="bg-background rounded p-2 border border-border font-mono text-[10px] flex gap-4">
                         <div><span className="text-text-secondary">LAT </span>{r.latitude?.toFixed(5)}</div>
                         <div><span className="text-text-secondary">LNG </span>{r.longitude?.toFixed(5)}</div>
@@ -458,11 +670,24 @@ export const CandidateEval = () => {
             </>
           )}
 
-          {/* Idle state */}
           {mode === 'idle' && (
             <div className="flex flex-col items-center justify-center flex-1 text-center py-10 space-y-4">
               <Target size={40} className="text-text-muted opacity-30" />
-              <p className="text-text-secondary text-sm">Choose a mode to begin evaluation.</p>
+              <p className="text-text-secondary text-sm max-w-[220px]">
+                Choose a workflow to begin.
+              </p>
+              <div className="text-xs text-text-muted space-y-1 text-left border border-border rounded p-3 bg-background w-full">
+                <div className="flex items-center gap-2 mb-2">
+                  <MapPin size={10} className="text-amber-400 shrink-0" />
+                  <span className="font-bold text-amber-400 uppercase tracking-wide text-[10px]">Select Location</span>
+                </div>
+                <p className="text-[10px] text-text-muted mb-3">You propose a location — NWIS evaluates it.</p>
+                <div className="flex items-center gap-2 mb-2">
+                  <Sparkles size={10} className="text-primary shrink-0" />
+                  <span className="font-bold text-primary uppercase tracking-wide text-[10px]">Find Recommended Locations</span>
+                </div>
+                <p className="text-[10px] text-text-muted">NWIS analyzes well intelligence and recommends candidate locations.</p>
+              </div>
             </div>
           )}
         </div>
